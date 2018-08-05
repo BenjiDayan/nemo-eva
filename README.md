@@ -4,6 +4,7 @@ The quantitative Network Model Evaluation framework
 > Thomas Bläsius, Tobias Friedrich, Maximilian Katzmann, Anton Krohmer and Jonathan Striebel  
 [Towards a Systematic Evaluation of Generative Network Models](https://hpi.de/friedrich/news/2018/waw.html?tx_extbibsonomycsl_publicationlist%5BuserName%5D=puma-friedrich&tx_extbibsonomycsl_publicationlist%5BintraHash%5D=ba31d2c6fa65ad94fee206e6d3ec477c&tx_extbibsonomycsl_publicationlist%5BfileName%5D=TowardsASystematicEvaluationOfGenerativeNetworkModels.pdf&tx_extbibsonomycsl_publicationlist%5Baction%5D=download&tx_extbibsonomycsl_publicationlist%5Bcontroller%5D=Document&cHash=aebce46aee1869cfc63db19e5e7f63f9)  
 [15th Workshop on Algorithms and Models for the Web Graph (2018)](http://www.math.ryerson.ca/waw2018/)  
+[Part of the Lecture Notes in Computer Science book series (LNCS, volume 10836)](https://link.springer.com/chapter/10.1007/978-3-319-92871-5_8)  
 ![HPI logo](https://hpi.de/fileadmin/user_upload/hpi/bilder/logos/hpi_logo_web.jpg)
 
 [![CircleCI](https://circleci.com/gh/jstriebel/nemo-eva.svg?style=svg)](https://circleci.com/gh/jstriebel/nemo-eva)
