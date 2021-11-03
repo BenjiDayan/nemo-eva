@@ -7,8 +7,6 @@ The quantitative Network Model Evaluation framework
 [Part of the Lecture Notes in Computer Science book series (LNCS, volume 10836)](https://link.springer.com/chapter/10.1007/978-3-319-92871-5_8)  
 ![HPI logo](https://hpi.de/fileadmin/user_upload/hpi/bilder/logos/hpi_logo_web.jpg)
 
-[![CircleCI](https://circleci.com/gh/jstriebel/nemo-eva.svg?style=svg)](https://circleci.com/gh/jstriebel/nemo-eva)
-
 ## Usage
 
 You can view the paper results rendered on github within this repo:
