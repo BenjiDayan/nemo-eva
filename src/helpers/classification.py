@@ -11,8 +11,9 @@ class Classification:
         cv = 3
 
         if cv_grid:
+            # print(f'model: {model}, cv_grid: {cv_grid}, scoring: accuracy, cv: {cv}, refit: False')
             grid_search = GridSearchCV(
-                model, cv_grid, "accuracy", cv=cv, refit=False)
+                model, cv_grid, scoring="accuracy", cv=cv, refit=False)
             grid_search.fit(X, Y)
             self.best_params = grid_search.best_params_
             model.set_params(**self.best_params)

@@ -3,16 +3,32 @@ import csv
 import itertools
 import math
 import multiprocessing
+import sys
 import numpy
 import powerlaw
 import random
 import networkit
+
+import sys
+sys.path.append('/cluster/home/bdayan/girgs/')
+from benji_src.benji_girgs import fitting, generation
 
 import os
 
 from abstract_stage import AbstractStage
 from graph_crawler import GraphCrawler
 from helpers.print_blocker import PrintBlocker
+
+class HiddenPrints:
+    def __enter__(self):
+        self._original_stdout = sys.stdout
+        sys.stdout = open(os.devnull, 'w')
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stdout.close()
+        sys.stdout = self._original_stdout
+
+PrintBlocker = HiddenPrints
 
 
 class NoDaemonProcessPool(multiprocessing.pool.Pool):
@@ -40,24 +56,29 @@ class FeatureExtractor(AbstractStage):
             a_dict = a_dict[subkey]
         return a_dict
 
+    # def shrink_to_giant_component(self, g):
+    #     comp = networkit.components.ConnectedComponents(g)
+    #     comp.run()
+    #     giant_id = max(comp.getPartition().subsetSizeMap().items(),
+    #                    key=lambda x: x[1])
+    #     giant_comp = comp.getPartition().getMembers(giant_id[0])
+    #     for v in g.nodes():
+    #         if v not in giant_comp:
+    #             for u in g.neighbors(v):
+    #                 g.removeEdge(v, u)
+    #             g.removeNode(v)
+    #     name = g.getName()
+    #     g = networkit.graph.GraphTools.getCompactedGraph(
+    #       g,
+    #       networkit.graph.GraphTools.getContinuousNodeIds(g)
+    #     )
+    #     g.setName(name)
+    #     return g
+
     def shrink_to_giant_component(self, g):
-        comp = networkit.components.ConnectedComponents(g)
-        comp.run()
-        giant_id = max(comp.getPartition().subsetSizeMap().items(),
-                       key=lambda x: x[1])
-        giant_comp = comp.getPartition().getMembers(giant_id[0])
-        for v in g.nodes():
-            if v not in giant_comp:
-                for u in g.neighbors(v):
-                    g.removeEdge(v, u)
-                g.removeNode(v)
-        name = g.getName()
-        g = networkit.graph.GraphTools.getCompactedGraph(
-          g,
-          networkit.graph.GraphTools.getContinuousNodeIds(g)
-        )
-        g.setName(name)
-        return g
+        cc = networkit.components.ConnectedComponents(g)
+        cc.run()
+        return cc.extractLargestConnectedComponent(g, True)
 
     def analyze(self, g):
         # networkit.engineering.setNumberOfThreads(1)
@@ -133,10 +154,11 @@ class FeatureExtractor(AbstractStage):
     def fit_ba(self, g, fully_connected_start):
         random.seed(42, version=2)
         networkit.setSeed(seed=42, useThreadId=False)
-        n, m = g.size()
+        # n, m = g.size()
+        n, m = g.numberOfNodes(), g.numberOfEdges()
         m_0 = math.ceil(m / n)
         ba = networkit.Graph(n)
-        nodes = ba.nodes()
+        nodes = list(ba.iterNodes())
         edges_added = 0
         if fully_connected_start:
             start_connections = itertools.combinations(nodes[:m_0], 2)
@@ -156,7 +178,8 @@ class FeatureExtractor(AbstractStage):
             while len(to_connect) < num_new_edges:
                 num_draws = num_new_edges - len(to_connect)
                 to_connect_draws = [
-                    random.choice(ba.randomEdge())
+                    # random.choice(ba.randomEdge())
+                    random.choice(networkit.graphtools.randomEdge(ba, True))
                     for i in range(num_draws)
                 ]
                 to_connect |= set(
@@ -177,7 +200,8 @@ class FeatureExtractor(AbstractStage):
         with PrintBlocker():
             fit = powerlaw.Fit(degrees, fit_method='Likelihood')
         gamma = max(fit.alpha, 2.1)
-        n, m = g.size()
+        # n, m = g.size()
+        n, m = g.numberOfNodes(), g.numberOfEdges()
         degree_counts = collections.Counter(degrees)
         n_hyper = n + max(0, 2*degree_counts[1] - degree_counts[2])
         k = 2 * m / (n_hyper-1)
@@ -203,24 +227,62 @@ class FeatureExtractor(AbstractStage):
         ]
         info = "|".join([name + "=" + str(val) for name, val in info_map])
         return (info, hyper)
+    
+
+    def fit_ndgirg(self, d):
+        def fit_girg(g):
+            n = g.numberOfNodes()
+            alpha, const, tau, hist, target_lcc, fit = fitting.fit_cgirg(g, d)
+            g_out, _, _, _, _, _ = generation.cgirg_gen(n, d, tau, alpha, const=const)
+            info_map = [
+                ("tau", tau),
+                ("alpha", alpha),
+                ("const", const),
+                ("fit", fit),
+                ("target_lcc", target_lcc),
+                ("hist", hist),
+            ]
+            info = "|".join([name + "=" + str(val) for name, val in info_map])
+            return (info, g_out)
+        return fit_girg
+
+    
+    # def fit_2dgirg(self, g):
+    #     d = 2
+    #     n = g.numberOfNodes()
+    #     alpha, const, tau, hist, target_lcc, fit = fitting.fit_cgirg(g, d, max_fit_steps=15)
+    #     g_out, _, _, _, _, _ = generation.cgirg_gen(n, d, tau, alpha, const=const)
+    #     info_map = [
+    #         ("tau", tau),
+    #         ("alpha", alpha),
+    #         ("const", const),
+    #         ("fit", fit),
+    #         ("target_lcc", target_lcc),
+    #         ("hist", hist),
+    #     ]
+    #     info = "|".join([name + "=" + str(val) for name, val in info_map])
+    #     return (info, g_out)
 
     def _execute_one_graph(self, graph_dict):
-        in_path = (
-            GraphCrawler()._stagepath +
-            graph_dict["Group"] + "/" +
-            graph_dict["Path"])
+        # in_path = (
+        #     GraphCrawler()._stagepath +
+        #     graph_dict["Group"] + "/" +
+        #     graph_dict["Path"])
+        in_path = graph_dict["FullPath"]
         out_path = self._stagepath + "results.csv"
         graph_type = graph_dict["Group"]
 
         g = None
+        # try:
+        #     g = networkit.readGraph(
+        #         in_path,
+        #         networkit.Format.EdgeList,
+        #         separator=" ",
+        #         firstNode=0,
+        #         commentPrefix="%",
+        #         continuous=True)
         try:
-            g = networkit.readGraph(
-                in_path,
-                networkit.Format.EdgeList,
-                separator=" ",
-                firstNode=0,
-                commentPrefix="%",
-                continuous=True)
+            g = networkit.readGraph(in_path, networkit.Format.EdgeListSpaceOne)
         except Exception as e:
             print(e)
 
@@ -230,7 +292,7 @@ class FeatureExtractor(AbstractStage):
             if g.degree(0) == 0:
                 g.removeNode(0)
 
-        print("Graph", g.toString())
+        # print("Graph", g.toString())
         g = self.shrink_to_giant_component(g)
         if g.numberOfNodes() < 100:
             print(
@@ -251,23 +313,39 @@ class FeatureExtractor(AbstractStage):
             ("chung-lu",
                 lambda x: ("", self.fit_chung_lu(x))),
             ("hyperbolic",
-                self.fit_hyperbolic)
+                self.fit_hyperbolic),
+            # ("1d-girg",
+            #     self.fit_1dgirg),
+            # ("2d-girg",
+            #     self.fit_2dgirg)    
         ]
+        for d in range(1, 6):
+            model_types.append(
+                (f"{d}d-girg", 
+                 lambda x: self.fit_ndgirg(d)(x)
+                )
+            )
 
-        # outputs = []
+        outputs = []
         # all_keys = set()
         for model_name, model_converter in model_types:
             try:
                 info, model = model_converter(g)
                 output = self.analyze(model)
             except ZeroDivisionError as e:
-                print("Error:", e, "for", model_name, "of", g.getName(), model)
+                print("Error:", e, "for", model_name, "of", graph_dict["Name"], model_name)
+            except Exception as e:
+                print("Error:", e, "for", model_name, "of", graph_dict["Name"], model_name)
             else:
-                output["Graph"] = g.getName()
+                # output["Graph"] = g.getName()
+                output["Graph"] = graph_dict["Name"]
                 output["Type"] = graph_type
                 output["Model"] = model_name
                 output["Info"] = info
                 self._save_as_csv(output)
+
+        #     outputs.append(output)
+        # return outputs
                 # outputs.append((model_name, info, output))
                 # all_keys |= set(output.keys())
 
@@ -276,7 +354,57 @@ class FeatureExtractor(AbstractStage):
             #    output[key] = float("nan")
 
     def _execute(self):
-        pool = NoDaemonProcessPool()
+        pool = multiprocessing.Pool(10)
         pool.map(self._execute_one_graph, self.graph_dicts)
         pool.close()
         pool.join()
+
+    def execute_immediate_write(self):
+        if not os.path.exists(self._stagepath):
+            os.makedirs(self._stagepath)
+
+        writer_pool = multiprocessing.Pool(1)
+        writer_out = writer_pool.apply_async(self.listener, (self._dict_queue,))
+
+        pool = multiprocessing.Pool(12)
+        # pool.map(self._execute_one_graph, self.graph_dicts)
+
+        jobs = []
+        for graph_dict in self.graph_dicts:
+            job = pool.apply_async(self._execute_one_graph, (graph_dict,))
+            jobs.append(job)
+
+        for job in jobs:
+            job.get()
+        
+        self._dict_queue.put(None)
+
+        pool.close()
+        pool.join()
+        writer_out.get()
+
+        writer_pool.close()
+        writer_pool.join()
+
+
+    def listener(self, q):
+        with open(self.resultspath, "w") as results_file:
+            wrote_header = False
+            while True:
+                result_dict = q.get()
+                if result_dict is None:
+                    print('Done writing to csv')
+                    break
+                else:
+                    print(f'Saving csv of result {result_dict["Graph"]}, {result_dict["Model"]}')
+
+                all_keys = set(result_dict.keys())
+                fieldnames = sorted(all_keys)
+
+                dict_writer = csv.DictWriter(results_file, fieldnames)
+                if not wrote_header:
+                    dict_writer.writeheader()
+                    wrote_header = True
+
+                dict_writer.writerow(result_dict)
+                results_file.flush()

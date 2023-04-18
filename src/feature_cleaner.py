@@ -22,7 +22,7 @@ class FeatureCleaner(AbstractStage):
         df.columns.name = "Feature"
         df.set_index("Graph", inplace=True)
         df['Info'] = df['Info'].fillna("no info")
-        object_cols = df.columns[df.dtypes == numpy.object]
+        object_cols = df.columns[df.dtypes == object]
         df[object_cols] = df[object_cols].astype(str)
 
         # clean features
