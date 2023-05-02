@@ -8,7 +8,7 @@ import pandas
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
-
+import os
 
 def classification_experiment(df, network_models, features_collection, printing=False):
     Y = df["Model"]
@@ -66,6 +66,8 @@ class Classifier(AbstractStage):
         self.features = features
 
     def _execute(self):
+        print('making output path')
+        os.makedirs(self._stagepath + "accuracies/", exist_ok=True)
         df = dicts_to_df(self.features)
         format_feature_df(df)
 
