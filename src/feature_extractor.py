@@ -9,10 +9,14 @@ import powerlaw
 import random
 import networkit
 import pandas as pd
+import numpy as np
 
 import sys
 
-from girg_sampling import girgs
+try:
+    from girg_sampling import girgs
+except Exception:
+    pass
 
 sys.path.append('/cluster/home/bdayan/girgs/')
 from benji_src.benji_girgs import fitting, generation, utils
@@ -199,6 +203,71 @@ class FeatureExtractor(AbstractStage):
         out = min([(a, f_a), (b, f_b), (m, f_m)], key=lambda x: abs(goal - x[1]))
         return out, [out]
 
+    def binary_search_better_noisy(self, goal_f, goal, a, b, memo={}, abs_bounds=[0.01, 0.99], depth=0, verbose=False):
+        m = (a + b) / 2
+        f_outs = []
+        for x in [a, m, b]:
+            if x not in memo:
+                if verbose:
+                    print(f'calling goal_f(alpha={1/x})')
+                memo[x] = goal_f(x, depth=depth)
+            f_outs.append(memo[x])
+        f_a, f_m, f_b = f_outs
+
+        if verbose:
+            print()
+            print(f'a: {a}, m: {m}, b: {b}, f_a: {f_a}, f_m: {f_m}, f_b: {f_b}, goal: {goal}')
+
+        if depth < 10:
+            # if goal > max(f_a, f_m, f_b) or goal_f < min(f_a, f_m, f_b):
+            # Either:
+            #   1. goal is outside all - go for the side which is closer to goal
+            #       e.g. goal_f > f_a, f_b, f_m. Perhaps goal_f > f_a > f_m > f_b, or even goal_f > f_m > f_a, f_b
+            #       then we would pick the a, m side. However we won't shrink the bounds, instead shift, so
+            #       (a, m, b) <- (a-m, a, m), unless this would mean exceeding abs_bounds. This is to deal with
+            #       noisy function evaluations.
+            #   2. goal is somewhere between peeps.
+            #       if e.g. _ - ` then we should check which side enclosure
+            #       if e.g. - ' _  then could be both enclosure or just one.
+            #
+            a_closer = abs(goal - f_a) < abs(goal - f_b)
+            a_m_enclosure = f_a <= goal <= f_m or f_a >= goal >= f_m
+            m_b_enclosure = f_m <= goal <= f_b or f_m >= goal >= f_b
+            if a_m_enclosure or m_b_enclosure:  # Case 2: enclosed by one or both sides
+                a_side = a_m_enclosure  # If both sides enclosed then either is good.
+                lo = a if a_side else m
+                hi = m if a_side else b
+            else:  # Case 1: not enclosed by either side so just go to the closest one
+                a_side = a_closer
+                if a_side:
+                    lo, hi = a - (b-a)/2, m
+                    if lo < abs_bounds[0]:
+                        lo, hi = abs_bounds[0], b
+                else:
+                    lo, hi = m, b + (b-a)/2
+                    if hi > abs_bounds[1]:
+                        lo, hi = a, abs_bounds[1]
+
+                # Since the objective has escaped, we can remove the memoized values.
+                # The problem is that if we are on the edge of the abs_bounds, then we're probably going
+                # to just recompute needlessly and fail to enclose the goal anyway. So in that case we decline
+                # to recompute.
+                for x in [lo, (lo + hi)/2, hi]:
+                    if x in memo and not (lo in abs_bounds or hi in abs_bounds):
+                        memo.pop(x)
+
+            out, hist_out = self.binary_search_better_noisy(
+                goal_f, goal,
+                lo, hi, memo=memo, abs_bounds=abs_bounds,
+                depth=depth+1, verbose=verbose)
+
+            return out, [(m, f_m)] + hist_out
+
+        # max depth exceeded, return best guess - closest to goal. This is easy if goal is
+        # goal_f < f_* or goal_f > f_*
+        out = min([(a, f_a), (b, f_b), (m, f_m)], key=lambda x: abs(goal - x[1]))
+        return out, [out]
+
     def half_double_search(self, goal_f, goal, a, b, m, f_a=None, f_b=None, f_m=None, depth=0, verbose=False):
         """We assume that goal_f is monotonic in general as a function of input. E.g. it's an increasing
         function if input is const and criterium is avg degree
@@ -347,21 +416,21 @@ class FeatureExtractor(AbstractStage):
             n, tau = len(weights), None
             criterium = lambda g: utils.avg_degree(g)
             def guess_goal(const, *args, **kwargs):
-                g_out, const = generation.cgirg_gen_cube(n, d, tau, alpha, const=const, weights=weights)
+                g_out = generation.cgirg_gen_cube(n, d, tau, alpha, const=const, weights=weights)
                 return criterium(g_out)
 
             # FIXME do we want to put this hack back in?
             # depth = 0 if const is None else 2 + outer_depth//2
-            depth = 5
+            depth = 6
             if verbose:
-                print(f'starting search at const={const}; depth={depth}')
+                print(f'starting search at const={const}; depth={depth}: For alpha={alpha}')
 
             if const is None:
                 (const, crit_diff), hist = self.half_double_search(guess_goal, goal, 0.5, 2.0, 1.0, depth=depth, verbose=verbose)
             else:
                 (const, crit_diff), hist = self.half_double_search(guess_goal, goal, 0.5*const, 2*const, const, depth=depth,verbose=verbose)
 
-            g_out, const = generation.cgirg_gen_cube(n, d, tau, alpha, const=const, weights=weights)
+            g_out = generation.cgirg_gen_cube(n, d, tau, alpha, const=const, weights=weights)
             return g_out, const, crit_diff, hist
         return fit_girg
 
@@ -398,13 +467,17 @@ class FeatureExtractor(AbstractStage):
                     g_out, _, _, _, _, _ = generation.cgirg_gen(n, d, tau, alpha, desiredAvgDegree=target_avg_degree)
                 else:
                     # we need 2**d sized weights, e.g. d=2 then the [0, 0.5] x [0, 0.5] has 1/4 of the total points
-                    weights = girgs.generateWeights((2**d)*n, tau)
+                    weights = girgs.generateWeights(n, tau)
+
                     # FIXME do we want to put this hack back in?
                     # const_guess = const if not t in [0.1, 0.99] else None
 
-                    # * 1.3 rough guess because cgirg_gen_cube will have lower degrees than cgirg_gen
-                    const_guess = girgs.scaleWeights(weights, target_avg_degree, d, alpha) * 1.3
-                    g_out, const, crit_diff, const_hist = \
+                    # FIXME wtf is going on with nonlocal const?
+                    # let's use something a bit more reasonable for the moment. * 1.2 for a rough guess
+                    const_guess = girgs.scaleWeights(weights, target_avg_degree, d, alpha) * 1.2
+
+
+                    g_out, _, crit_diff, const_hist = \
                         self.fit_ndgirg_cube_const(
                             d, alpha, target_avg_degree, verbose=verbose
                         )(weights, const=const_guess, outer_depth=depth)
@@ -412,18 +485,23 @@ class FeatureExtractor(AbstractStage):
                     # FIXME mild hack to make nonlocal const only track for the alpha = m middle of binsearch
                     # if not t in [0.1, 0.99]:  # don't update the nonlocal const - i.e. have to revert it back
                     #     const = const_new
-
                 return criterium(g_out)
 
-            (t, crit_diff), hist = self.binary_search_better(guess_goal, goal, 0.01, 0.99, verbose=verbose)
+            (t, crit_diff), hist = self.binary_search_better_noisy(guess_goal, goal, 0.01, 0.99, memo={}, verbose=verbose, depth=3)
             alpha = 1/t
             hist = [(1/t, crit_diff) for t, crit_diff in hist]
 
             if cube == False:
                 g_out, _, _, _, const, _ = generation.cgirg_gen(n, d, tau, alpha, desiredAvgDegree=target_avg_degree)
             else:
-                weights = girgs.generateWeights((2**d)*n, tau)
-                g_out, _ = generation.cgirg_gen_cube((2**d)*n, d, tau, alpha, const=const, weights=weights)
+                # we need to figure out what const is again, because we don't record it in the inner loop.
+                weights = girgs.generateWeights(n, tau)
+                const_guess = girgs.scaleWeights(weights, target_avg_degree, d, alpha) * 1.2
+                g_out, const, crit_diff, const_hist = \
+                    self.fit_ndgirg_cube_const(
+                        d, alpha, target_avg_degree, verbose=verbose
+                    )(weights, const=const_guess, outer_depth=4)
+                # g_out, _ = generation.cgirg_gen_cube(n, d, tau, alpha, const=const, weights=weights)
 
             info_map = [
                 ("tau", tau),
@@ -550,11 +628,14 @@ class FeatureExtractor(AbstractStage):
         outputs = []
         # all_keys = set()
         for model_name, model_converter in model_types:
-            if self.results_df.loc[
+            try:
+                if self.results_df.loc[
                     (self.results_df["Graph"] == graph_dict["Name"]) &
                     (self.results_df["Model"] == model_name)].shape[0] > 0:
-                print("Skipping", model_name, "for", graph_dict["Name"])
-                continue
+                    print("Skipping", model_name, "for", graph_dict["Name"])
+                    continue
+            except AttributeError:  # no results_df found
+                pass
             try:
                 info, model = model_converter(g)
                 output = self.analyze(model)
@@ -592,7 +673,7 @@ class FeatureExtractor(AbstractStage):
         writer_pool = multiprocessing.Pool(1)
         writer_out = writer_pool.apply_async(self.listener, (self._dict_queue,))
 
-        pool = multiprocessing.Pool(10)
+        pool = multiprocessing.Pool(14)
         # pool.map(self._execute_one_graph, self.graph_dicts)
 
         jobs = []
